@@ -1,0 +1,22 @@
+# Виртуальное окружение
+venv/
+.env
+
+# Компиляция Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Логи
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# MacOS
+.DS_Store
+
+# Кэш pip
+pip-wheel-metadata/
