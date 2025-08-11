@@ -74,26 +74,13 @@ class ConfigManager:
                 )
             return tours
         except FileNotFoundError:
-            logger.warning("tours.json не найден, используются туры по умолчанию")
-            return ConfigManager._get_default_tours()
+            logger.error("tours.json не найден! Создайте файл tours.json с турами.")
+            return {}
+        except json.JSONDecodeError as e:
+            logger.error(f"Ошибка в tours.json: {e}")
+            return {}
     
-    @staticmethod
-    def _get_default_tours() -> Dict[str, TourInfo]:
-        """Возвращает туры по умолчанию"""
-        return {
-            "georgia": TourInfo(
-                name="Грузия",
-                description="Грузия — прекрасная страна с горами, морем и вином.",
-                url="https://example.com/georgia",
-                manager_contact="+375291234567"
-            ),
-            "abkhazia": TourInfo(
-                name="Абхазия",
-                description="<b>Абхазия: Два варианта!</b> 1️⃣ <b>АВТОБУСНЫЙ</b> ... 2️⃣ <b>ЖД</b> ...",
-                url="https://zefirtravel.by/avtobusnie-tury-iz-minska-s-otdyhom-na-more/?set_filter=y&arFilterTours_262_1198337567=Y",
-                manager_contact="+375292345678"
-            )
-        }
+
 
 class MessageTemplates:
     """Шаблоны сообщений"""
