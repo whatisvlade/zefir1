@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
-from flask import Flask, request
+from flask import Flask
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -31,6 +31,7 @@ class BotConfig:
     avia_tour_link: str
     working_hours: Dict[str, int]
     company_info: Dict[str, str]
+    webhook_url: Optional[str] = None
 
 class ConfigManager:
     """Менеджер для работы с конфигурацией"""
@@ -54,7 +55,8 @@ class ConfigManager:
             company_info=config_data.get("company_info", {
                 "address": "г. Минск, ул. Примерная, 1",
                 "schedule": "пн-пт 10:00–19:00, сб 11:00–16:00, вс — по договорённости"
-            })
+            }),
+            webhook_url=os.getenv("WEBHOOK_URL", config_data.get("webhook_url"))
         )
     
     @staticmethod
@@ -121,26 +123,12 @@ class TravelBot:
         self.config = ConfigManager.load_config()
         self.tours = ConfigManager.load_tours()
         self.app = Flask('')
-        self.application = None
         
     def setup_flask(self):
         """Настройка Flask приложения"""
         @self.app.route('/')
         def home():
             return "✅ Бот работает"
-        
-        @self.app.route('/webhook', methods=['POST'])
-        def webhook():
-            """Обработчик webhook от Telegram"""
-            try:
-                json_data = request.get_json()
-                if json_data:
-                    update = Update.de_json(json_data, self.application.bot)
-                    asyncio.create_task(self.application.process_update(update))
-                return "OK", 200
-            except Exception as e:
-                logger.error(f"Ошибка в webhook: {e}")
-                return "Error", 500
     
     def keep_alive(self):
         """Запуск Flask сервера в отдельном потоке"""
@@ -328,15 +316,35 @@ class TravelBot:
             logger.error("BOT_TOKEN не установлен!")
             return
         
-        application = ApplicationBuilder().token(self.config.bot_token).build()
-        application.add_handler(CommandHandler("start", self.start_command))
-        application.add_handler(CallbackQueryHandler(self.handle_callback_query))
+        self.application = ApplicationBuilder().token(self.config.bot_token).build()
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
+        
+        # Устанавливаем webhook
+        webhook_url = os.getenv("WEBHOOK_URL")
+        if webhook_url:
+            await self.application.bot.set_webhook(url=f"{webhook_url}/webhook")
+            logger.info(f"Webhook установлен: {webhook_url}/webhook")
+        else:
+            # Удаляем webhook если его нет
+            await self.application.bot.delete_webhook()
+            logger.info("Webhook удален, используется polling")
         
         self.setup_flask()
         self.keep_alive()
         
         logger.info("Бот запущен")
-        await application.run_polling()
+        
+        # Если есть webhook URL, запускаем только Flask, иначе polling
+        if webhook_url:
+            # Инициализируем приложение для webhook
+            await self.application.initialize()
+            await self.application.start()
+            # Держим приложение запущенным
+            while True:
+                await asyncio.sleep(1)
+        else:
+            await self.application.run_polling()
 
 async def main():
     """Главная функция"""
