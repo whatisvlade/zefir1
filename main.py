@@ -9,6 +9,7 @@ from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from datetime import datetime
+import concurrent.futures
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -106,6 +107,7 @@ class TravelBot:
         self.tours = ConfigManager.load_tours()
         self.app = Flask('')
         self.application = None
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         
     def setup_flask(self):
         """Настройка Flask приложения"""
@@ -118,17 +120,31 @@ class TravelBot:
             """Обработчик webhook от Telegram"""
             try:
                 json_data = request.get_json()
-                if json_data:
+                if json_data and self.application:
                     update = Update.de_json(json_data, self.application.bot)
-                    asyncio.create_task(self.application.process_update(update))
+                    # Запускаем обработку в отдельном потоке
+                    self.executor.submit(self._process_update_sync, update)
                 return "OK", 200
             except Exception as e:
                 logger.error(f"Ошибка в webhook: {e}")
                 return "Error", 500
     
+    def _process_update_sync(self, update):
+        """Синхронная обертка для обработки обновлений"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.application.process_update(update))
+            loop.close()
+        except Exception as e:
+            logger.error(f"Ошибка при обработке обновления: {e}")
+    
     def keep_alive(self):
         """Запуск Flask сервера в отдельном потоке"""
         def run():
+            import logging
+            log = logging.getLogger('werkzeug')
+            log.setLevel(logging.ERROR)  # Скрыть предупреждения Flask
             self.app.run(host='0.0.0.0', port=8080)
         
         t = Thread(target=run)
