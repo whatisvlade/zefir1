@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
-from flask import Flask
+from flask import Flask, request
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -74,13 +74,26 @@ class ConfigManager:
                 )
             return tours
         except FileNotFoundError:
-            logger.error("tours.json не найден! Создайте файл tours.json с турами.")
-            return {}
-        except json.JSONDecodeError as e:
-            logger.error(f"Ошибка в tours.json: {e}")
-            return {}
+            logger.warning("tours.json не найден, используются туры по умолчанию")
+            return ConfigManager._get_default_tours()
     
-
+    @staticmethod
+    def _get_default_tours() -> Dict[str, TourInfo]:
+        """Возвращает туры по умолчанию"""
+        return {
+            "georgia": TourInfo(
+                name="Грузия",
+                description="Грузия — прекрасная страна с горами, морем и вином.",
+                url="https://example.com/georgia",
+                manager_contact="+375291234567"
+            ),
+            "abkhazia": TourInfo(
+                name="Абхазия",
+                description="<b>Абхазия: Два варианта!</b> 1️⃣ <b>АВТОБУСНЫЙ</b> ... 2️⃣ <b>ЖД</b> ...",
+                url="https://zefirtravel.by/avtobusnie-tury-iz-minska-s-otdyhom-na-more/?set_filter=y&arFilterTours_262_1198337567=Y",
+                manager_contact="+375292345678"
+            )
+        }
 
 class MessageTemplates:
     """Шаблоны сообщений"""
@@ -108,12 +121,26 @@ class TravelBot:
         self.config = ConfigManager.load_config()
         self.tours = ConfigManager.load_tours()
         self.app = Flask('')
+        self.application = None
         
     def setup_flask(self):
         """Настройка Flask приложения"""
         @self.app.route('/')
         def home():
             return "✅ Бот работает"
+        
+        @self.app.route('/webhook', methods=['POST'])
+        def webhook():
+            """Обработчик webhook от Telegram"""
+            try:
+                json_data = request.get_json()
+                if json_data:
+                    update = Update.de_json(json_data, self.application.bot)
+                    asyncio.create_task(self.application.process_update(update))
+                return "OK", 200
+            except Exception as e:
+                logger.error(f"Ошибка в webhook: {e}")
+                return "Error", 500
     
     def keep_alive(self):
         """Запуск Flask сервера в отдельном потоке"""
