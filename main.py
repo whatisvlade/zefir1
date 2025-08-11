@@ -10,6 +10,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from datetime import datetime
 import concurrent.futures
+import pytz
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -152,8 +153,9 @@ class TravelBot:
         t.start()
     
     def is_working_hours(self) -> bool:
-        """Проверяет, рабочее ли время"""
-        current_hour = datetime.now().hour
+        """Проверяет, рабочее ли время (московское время)"""
+        moscow_tz = pytz.timezone('Europe/Moscow')
+        current_hour = datetime.now(moscow_tz).hour
         start_hour = self.config.working_hours["start"]
         end_hour = self.config.working_hours["end"]
         return start_hour <= current_hour < end_hour
