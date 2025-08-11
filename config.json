@@ -1,0 +1,14 @@
+{
+  "bot_token": "",
+  "request_trigger": "#ЗАЯВКА",
+  "default_manager_contact": "+375290000000",
+  "avia_tour_link": "https://tours.example.com",
+  "working_hours": {
+    "start": 10,
+    "end": 21
+  },
+  "company_info": {
+    "address": "г. Минск, ул. Примерная, 1",
+    "schedule": "пн-пт 10:00–19:00, сб 11:00–16:00, вс — по договорённости"
+  }
+}
