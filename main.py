@@ -4,12 +4,9 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
-from flask import Flask, request
-from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from datetime import datetime
-import concurrent.futures
 import pytz
 
 # Настройка логирования
@@ -33,7 +30,6 @@ class BotConfig:
     avia_tour_link: str
     working_hours: Dict[str, int]
     company_info: Dict[str, str]
-    webhook_url: Optional[str] = None
 
 class ConfigManager:
     """Менеджер для работы с конфигурацией"""
@@ -57,8 +53,7 @@ class ConfigManager:
             company_info=config_data.get("company_info", {
                 "address": "г. Минск, ул. Примерная, 1",
                 "schedule": "пн-пт 10:00–19:00, сб 11:00–16:00, вс — по договорённости"
-            }),
-            webhook_url=os.getenv("WEBHOOK_URL", config_data.get("webhook_url"))
+            })
         )
     
     @staticmethod
@@ -106,51 +101,7 @@ class TravelBot:
     def __init__(self):
         self.config = ConfigManager.load_config()
         self.tours = ConfigManager.load_tours()
-        self.app = Flask('')
         self.application = None
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        
-    def setup_flask(self):
-        """Настройка Flask приложения"""
-        @self.app.route('/')
-        def home():
-            return "✅ Бот работает"
-        
-        @self.app.route('/webhook', methods=['POST'])
-        def webhook():
-            """Обработчик webhook от Telegram"""
-            try:
-                json_data = request.get_json()
-                if json_data and self.application:
-                    update = Update.de_json(json_data, self.application.bot)
-                    # Запускаем обработку в отдельном потоке
-                    self.executor.submit(self._process_update_sync, update)
-                return "OK", 200
-            except Exception as e:
-                logger.error(f"Ошибка в webhook: {e}")
-                return "Error", 500
-    
-    def _process_update_sync(self, update):
-        """Синхронная обертка для обработки обновлений"""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.application.process_update(update))
-            loop.close()
-        except Exception as e:
-            logger.error(f"Ошибка при обработке обновления: {e}")
-    
-    def keep_alive(self):
-        """Запуск Flask сервера в отдельном потоке"""
-        def run():
-            import logging
-            log = logging.getLogger('werkzeug')
-            log.setLevel(logging.ERROR)  # Скрыть предупреждения Flask
-            self.app.run(host='0.0.0.0', port=8080)
-        
-        t = Thread(target=run)
-        t.daemon = True
-        t.start()
     
     def is_working_hours(self) -> bool:
         """Проверяет, рабочее ли время (московское время)"""
@@ -334,31 +285,8 @@ class TravelBot:
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
         
-        # Устанавливаем webhook
-        webhook_url = self.config.webhook_url
-        if webhook_url:
-            await self.application.bot.set_webhook(url=f"{webhook_url}/webhook")
-            logger.info(f"Webhook установлен: {webhook_url}/webhook")
-        else:
-            # Удаляем webhook если его нет
-            await self.application.bot.delete_webhook()
-            logger.info("Webhook удален, используется polling")
-        
-        self.setup_flask()
-        self.keep_alive()
-        
-        logger.info("Бот запущен")
-        
-        # Если есть webhook URL, запускаем только Flask, иначе polling
-        if webhook_url:
-            # Инициализируем приложение для webhook
-            await self.application.initialize()
-            await self.application.start()
-            # Держим приложение запущенным
-            while True:
-                await asyncio.sleep(1)
-        else:
-            await self.application.run_polling()
+        logger.info("Бот запущен в режиме polling")
+        await self.application.run_polling()
 
 async def main():
     """Главная функция"""
