@@ -10,5 +10,6 @@
   "company_info": {
     "address": "г. Минск, ул. Примерная, 1",
     "schedule": "пн-пт 10:00–19:00, сб 11:00–16:00, вс — по договорённости"
-  }
+  },
+  "webhook_url": "https://zefir1.onrender.com"
 }
