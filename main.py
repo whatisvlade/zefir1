@@ -4,6 +4,8 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from flask import Flask
+from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from datetime import datetime
@@ -102,6 +104,24 @@ class TravelBot:
         self.config = ConfigManager.load_config()
         self.tours = ConfigManager.load_tours()
         self.application = None
+        self.app = Flask('')
+    
+    def keep_alive(self):
+        """Простой веб-сервер для Render"""
+        @self.app.route('/')
+        def home():
+            return "✅ Zefir Travel Bot работает!"
+
+        def run():
+            # Скрываем логи Flask
+            import logging
+            log = logging.getLogger('werkzeug')
+            log.setLevel(logging.ERROR)
+            self.app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
+        t = Thread(target=run)
+        t.daemon = True
+        t.start()
     
     def is_working_hours(self) -> bool:
         """Проверяет, рабочее ли время (московское время)"""
@@ -284,6 +304,9 @@ class TravelBot:
         self.application = ApplicationBuilder().token(self.config.bot_token).build()
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
+        
+        # Запускаем Flask сервер для Render
+        self.keep_alive()
         
         logger.info("Бот запущен в режиме polling")
         await self.application.run_polling()
