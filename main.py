@@ -1,219 +1,333 @@
 import asyncio
 import os
+import json
+import logging
+from typing import Dict, Any, Optional
+from dataclasses import dataclass
 from flask import Flask
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 from datetime import datetime
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-REQUEST_TRIGGER = "#ЗАЯВКА"
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# --- Контакты менеджеров ---
-MANAGER_CONTACTS = {
-    "default": "+375290000000",  # Общий по умолчанию
-    "georgia": "+375291234567",
-    "abkhazia": "+375292345678",
-    "gelendzhik": "+375293456789",
-    "dagestan": "+375294567890",
-    "piter": "+375295678901",
-    "teriberka": "+375296789012",
-    "belarus": "+375297890123",
-    "avia": "+375298888888",  # Менеджер по авиа турам
-}
+@dataclass
+class TourInfo:
+    """Класс для хранения информации о туре"""
+    name: str
+    description: str
+    url: str
+    manager_contact: Optional[str] = None
 
-# --- Автобусные туры ---
-BUS_TOURS = {
-    "georgia": {
-        "name": "Грузия",
-        "desc": "Грузия — прекрасная страна с горами, морем и вином.",
-        "url": "https://example.com/georgia"
-    },
-    "abkhazia": {
-        "name": "Абхазия",
-        "desc": "<b>Абхазия: Два варианта!</b> 1️⃣ <b>АВТОБУСНЫЙ</b> ... 2️⃣ <b>ЖД</b> ...",
-        "url": "https://zefirtravel.by/avtobusnie-tury-iz-minska-s-otdyhom-na-more/?set_filter=y&arFilterTours_262_1198337567=Y"
-    },
-    "gelendzhik": {
-        "name": "Геленджик",
-        "desc": "<b>Тур в Геленджик</b> <b>Даты:</b> ...",
-        "url": "https://zefirtravel.by/avtobusnie-tury-iz-minska-s-otdyhom-na-more/?set_filter=y&arFilterTours_262_2671772459=Y"
-    },
-    "dagestan": {
-        "name": "Дагестан",
-        "desc": "<b>Тур в Дагестан</b> Даты: ...",
-        "url": "https://zefirtravel.by/offers/tur-v-dagestan-serdtse-kavkaza/"
-    },
-    "piter": {
-        "name": "Питер",
-        "desc": "<b>Тур в Санкт-Петербург</b> <b>Даты:</b> ...",
-        "url": "https://zefirtravel.by/offers/tur-v-sankt-peterburg-kareliya/"
-    },
-    "teriberka": {
-        "name": "Териберка",
-        "desc": "<b>Тур в Териберку!</b> <b>Даты:</b> ...",
-        "url": "https://zefirtravel.by/offers/teriberka-aysfloating-i-mogushchestvennye-kity/"
-    },
-    "belarus": {
-        "name": "Беларусь",
-        "desc": "<b>Западные сокровища Беларуси: Коссово и Ружаны</b> Даты: ...",
-        "url": "https://zefirtravel.by/offers/zapadnye-sokrovishcha-belarusi-kossovo-i-ruzhany/"
-    },
-}
+@dataclass
+class BotConfig:
+    """Класс для хранения конфигурации бота"""
+    bot_token: str
+    request_trigger: str
+    default_manager_contact: str
+    avia_tour_link: str
+    working_hours: Dict[str, int]
+    company_info: Dict[str, str]
 
-# --- Авиа туры ---
-AVIA_TOUR_LINK = "https://tours.example.com"
+class ConfigManager:
+    """Менеджер для работы с конфигурацией"""
+    
+    @staticmethod
+    def load_config() -> BotConfig:
+        """Загружает конфигурацию из файла или переменных окружения"""
+        try:
+            with open('config.json', 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+        except FileNotFoundError:
+            logger.warning("config.json не найден, используются значения по умолчанию")
+            config_data = {}
+        
+        return BotConfig(
+            bot_token=os.getenv("BOT_TOKEN", config_data.get("bot_token", "")),
+            request_trigger=config_data.get("request_trigger", "#ЗАЯВКА"),
+            default_manager_contact=config_data.get("default_manager_contact", "+375290000000"),
+            avia_tour_link=config_data.get("avia_tour_link", "https://tours.example.com"),
+            working_hours=config_data.get("working_hours", {"start": 10, "end": 21}),
+            company_info=config_data.get("company_info", {
+                "address": "г. Минск, ул. Примерная, 1",
+                "schedule": "пн-пт 10:00–19:00, сб 11:00–16:00, вс — по договорённости"
+            })
+        )
+    
+    @staticmethod
+    def load_tours() -> Dict[str, TourInfo]:
+        """Загружает информацию о турах из файла"""
+        try:
+            with open('tours.json', 'r', encoding='utf-8') as f:
+                tours_data = json.load(f)
+            
+            tours = {}
+            for key, data in tours_data.items():
+                tours[key] = TourInfo(
+                    name=data["name"],
+                    description=data["description"],
+                    url=data["url"],
+                    manager_contact=data.get("manager_contact")
+                )
+            return tours
+        except FileNotFoundError:
+            logger.warning("tours.json не найден, используются туры по умолчанию")
+            return ConfigManager._get_default_tours()
+    
+    @staticmethod
+    def _get_default_tours() -> Dict[str, TourInfo]:
+        """Возвращает туры по умолчанию"""
+        return {
+            "georgia": TourInfo(
+                name="Грузия",
+                description="Грузия — прекрасная страна с горами, морем и вином.",
+                url="https://example.com/georgia",
+                manager_contact="+375291234567"
+            ),
+            "abkhazia": TourInfo(
+                name="Абхазия",
+                description="<b>Абхазия: Два варианта!</b> 1️⃣ <b>АВТОБУСНЫЙ</b> ... 2️⃣ <b>ЖД</b> ...",
+                url="https://zefirtravel.by/avtobusnie-tury-iz-minska-s-otdyhom-na-more/?set_filter=y&arFilterTours_262_1198337567=Y",
+                manager_contact="+375292345678"
+            )
+        }
 
-app = Flask('')
+class MessageTemplates:
+    """Шаблоны сообщений"""
+    
+    @staticmethod
+    def welcome_message(user_name: str) -> str:
+        return f"Привет, {user_name}! 👋\nДобро пожаловать в Zefir Travel!\nВыберите, что вас интересует:"
+    
+    @staticmethod
+    def request_sent_message(is_working_hours: bool) -> str:
+        if is_working_hours:
+            return "Заявка отправлена!\nОжидайте, с вами свяжется менеджер."
+        return "Заявка отправлена!\nВ рабочее время с вами свяжется менеджер."
+    
+    @staticmethod
+    def avia_request_sent_message(is_working_hours: bool) -> str:
+        if is_working_hours:
+            return "Заявка на подбор тура отправлена!\nОжидайте, с вами свяжется менеджер."
+        return "Заявка на подбор тура отправлена!\nВ рабочее время с вами свяжется менеджер."
 
-@app.route('/')
-def home():
-    return "✅ Бот работает"
-
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_text(
-        f"Привет, {user.first_name}! 👋\nДобро пожаловать в Zefir Travel!\nВыберите, что вас интересует:",
-        reply_markup=InlineKeyboardMarkup([
+class TravelBot:
+    """Основной класс бота"""
+    
+    def __init__(self):
+        self.config = ConfigManager.load_config()
+        self.tours = ConfigManager.load_tours()
+        self.app = Flask('')
+        
+    def setup_flask(self):
+        """Настройка Flask приложения"""
+        @self.app.route('/')
+        def home():
+            return "✅ Бот работает"
+    
+    def keep_alive(self):
+        """Запуск Flask сервера в отдельном потоке"""
+        def run():
+            self.app.run(host='0.0.0.0', port=8080)
+        
+        t = Thread(target=run)
+        t.daemon = True
+        t.start()
+    
+    def is_working_hours(self) -> bool:
+        """Проверяет, рабочее ли время"""
+        current_hour = datetime.now().hour
+        start_hour = self.config.working_hours["start"]
+        end_hour = self.config.working_hours["end"]
+        return start_hour <= current_hour < end_hour
+    
+    def get_main_menu_keyboard(self) -> InlineKeyboardMarkup:
+        """Возвращает клавиатуру главного меню"""
+        return InlineKeyboardMarkup([
             [InlineKeyboardButton("🚌 Автобусные туры", callback_data="bus_tours")],
             [InlineKeyboardButton("✈️ Авиа туры", callback_data="avia_tours")],
             [InlineKeyboardButton("📞 Контакты", callback_data="contact")]
         ])
-    )
-
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    # --- Автобусные туры ---
-    if query.data == "bus_tours":
+    
+    async def send_request_message(self, context: ContextTypes.DEFAULT_TYPE, 
+                                 chat_id: int, tour_name: str, user_info: str):
+        """Отправляет сообщение с заявкой и удаляет его через 3 секунды"""
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"{self.config.request_trigger} Тур: {tour_name}\n{user_info}"
+        )
+        
+        async def delete_message():
+            await asyncio.sleep(3)
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+            except Exception as e:
+                logger.error(f"Ошибка при удалении сообщения: {e}")
+        
+        asyncio.create_task(delete_message())
+    
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /start"""
+        user = update.effective_user
+        await update.message.reply_text(
+            MessageTemplates.welcome_message(user.first_name),
+            reply_markup=self.get_main_menu_keyboard()
+        )
+    
+    async def handle_bus_tours(self, query, context):
+        """Обработка автобусных туров"""
         buttons = [
-            [InlineKeyboardButton(f"🌍 {BUS_TOURS[key]['name']}", callback_data=f"tour_{key}")]
-            for key in BUS_TOURS
+            [InlineKeyboardButton(f"🌍 {tour.name}", callback_data=f"tour_{key}")]
+            for key, tour in self.tours.items()
         ]
         buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
+        
         await query.edit_message_text(
             "🚌 Автобусные туры:\nВыберите направление:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
-
-    # --- Страница конкретного автобусного тура ---
-    elif query.data.startswith("tour_"):
-        tour_key = query.data.replace("tour_", "")
-        if tour_key in BUS_TOURS:
-            tour = BUS_TOURS[tour_key]
-            manager_phone = MANAGER_CONTACTS.get(tour_key, MANAGER_CONTACTS["default"])
-            await query.edit_message_text(
-                f"{tour['desc']}\n\n📱 Контакт менеджера: {manager_phone}",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔗 Подробнее / Программа тура", url=tour['url'])],
-                    [InlineKeyboardButton("Оставить заявку", callback_data=f"request_{tour_key}")],
-                    [InlineKeyboardButton("🔙 Назад", callback_data="bus_tours")]
-                ]),
-                parse_mode="HTML"
-            )
-
-    # --- Заявка на тур ---
-    elif query.data.startswith("request_"):
-        direction = query.data.replace("request_", "")
-        tour_name = BUS_TOURS.get(direction, {}).get("name", direction)
-        back_btn = "bus_tours"
-        user = query.from_user
-        msg = await context.bot.send_message(
-            chat_id=query.message.chat.id,
-            text=f"{REQUEST_TRIGGER} Тур: {tour_name}\nИмя: {user.first_name} @{user.username or ''}"
-        )
-        async def delete_request_msg(bot, chat_id, message_id):
-            await asyncio.sleep(3)
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=message_id)
-            except Exception:
-                pass
-        asyncio.create_task(delete_request_msg(context.bot, query.message.chat.id, msg.message_id))
-        now_hour = datetime.now().hour
-        if 21 <= now_hour or now_hour < 10:
-            resp = "Заявка отправлена!\nВ рабочее время с вами свяжется менеджер."
-        else:
-            resp = "Заявка отправлена!\nОжидайте, с вами свяжется менеджер."
+    
+    async def handle_specific_tour(self, query, context, tour_key: str):
+        """Обработка конкретного тура"""
+        if tour_key not in self.tours:
+            await query.edit_message_text("Тур не найден")
+            return
+        
+        tour = self.tours[tour_key]
+        manager_phone = tour.manager_contact or self.config.default_manager_contact
+        
         await query.edit_message_text(
-            resp,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data=back_btn)]])
-        )
-
-    # --- Авиа туры ---
-    elif query.data == "avia_tours":
-        manager_phone = MANAGER_CONTACTS.get("avia", MANAGER_CONTACTS["default"])
-        await query.edit_message_text(
-            "✈️ Авиа туры:\n\n"
-            "Выберите действие:\n\n"
-            f"📱 Контакт менеджера: {manager_phone}",
+            f"{tour.description}\n\n📱 Контакт менеджера: {manager_phone}",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Самостоятельный подбор тура", url=AVIA_TOUR_LINK)],
+                [InlineKeyboardButton("🔗 Подробнее / Программа тура", url=tour.url)],
+                [InlineKeyboardButton("Оставить заявку", callback_data=f"request_{tour_key}")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="bus_tours")]
+            ]),
+            parse_mode="HTML"
+        )
+    
+    async def handle_tour_request(self, query, context, tour_key: str):
+        """Обработка заявки на тур"""
+        tour = self.tours.get(tour_key)
+        if not tour:
+            await query.edit_message_text("Тур не найден")
+            return
+        
+        user = query.from_user
+        user_info = f"Имя: {user.first_name} @{user.username or ''}"
+        
+        await self.send_request_message(
+            context, query.message.chat.id, tour.name, user_info
+        )
+        
+        response_text = MessageTemplates.request_sent_message(self.is_working_hours())
+        await query.edit_message_text(
+            response_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад", callback_data="bus_tours")]
+            ])
+        )
+    
+    async def handle_avia_tours(self, query, context):
+        """Обработка авиа туров"""
+        await query.edit_message_text(
+            f"✈️ Авиа туры:\n\n"
+            f"Выберите действие:\n\n"
+            f"📱 Контакт менеджера: {self.config.default_manager_contact}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Самостоятельный подбор тура", url=self.config.avia_tour_link)],
                 [InlineKeyboardButton("Оставить заявку (подбор тура с менеджером)", callback_data="avia_request")],
                 [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
             ]),
             parse_mode="HTML"
         )
-
-    elif query.data == "avia_request":
+    
+    async def handle_avia_request(self, query, context):
+        """Обработка заявки на авиа тур"""
         user = query.from_user
-        msg = await context.bot.send_message(
-            chat_id=query.message.chat.id,
-            text=f"{REQUEST_TRIGGER} Авиа тур\nИмя: {user.first_name} @{user.username or ''}"
+        user_info = f"Имя: {user.first_name} @{user.username or ''}"
+        
+        await self.send_request_message(
+            context, query.message.chat.id, "Авиа тур", user_info
         )
-        async def delete_request_msg(bot, chat_id, message_id):
-            await asyncio.sleep(3)
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=message_id)
-            except Exception:
-                pass
-        asyncio.create_task(delete_request_msg(context.bot, query.message.chat.id, msg.message_id))
-        now_hour = datetime.now().hour
-        if 21 <= now_hour or now_hour < 10:
-            resp = "Заявка на подбор тура отправлена!\nВ рабочее время с вами свяжется менеджер."
-        else:
-            resp = "Заявка на подбор тура отправлена!\nОжидайте, с вами свяжется менеджер."
+        
+        response_text = MessageTemplates.avia_request_sent_message(self.is_working_hours())
         await query.edit_message_text(
-            resp,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="avia_tours")]])
-        )
-
-    # --- Контакты ---
-    elif query.data == "contact":
-        manager_phone = MANAGER_CONTACTS.get("default")
-        await query.edit_message_text(
-            f"📞 Контакты:\n"
-            f"📱 Общий номер: {manager_phone}\n"
-            "🏢 Адрес: г. Минск, ул. Примерная, 1\n"
-            "🕓 Время работы: пн-пт 10:00–19:00, сб 11:00–16:00, вс — по договорённости",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]]),
-            parse_mode="HTML"
-        )
-
-    # --- Назад ---
-    elif query.data == "back_to_menu":
-        await query.edit_message_text(
-            f"Привет, {query.from_user.first_name}! 👋\nДобро пожаловать в Zefir Travel!\nВыберите, что вас интересует:",
+            response_text,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚌 Автобусные туры", callback_data="bus_tours")],
-                [InlineKeyboardButton("✈️ Авиа туры", callback_data="avia_tours")],
-                [InlineKeyboardButton("📞 Контакты", callback_data="contact")]
+                [InlineKeyboardButton("🔙 Назад", callback_data="avia_tours")]
             ])
         )
+    
+    async def handle_contacts(self, query, context):
+        """Обработка контактов"""
+        await query.edit_message_text(
+            f"📞 Контакты:\n"
+            f"📱 Общий номер: {self.config.default_manager_contact}\n"
+            f"🏢 Адрес: {self.config.company_info['address']}\n"
+            f"🕓 Время работы: {self.config.company_info['schedule']}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
+            ]),
+            parse_mode="HTML"
+        )
+    
+    async def handle_back_to_menu(self, query, context):
+        """Возврат в главное меню"""
+        await query.edit_message_text(
+            MessageTemplates.welcome_message(query.from_user.first_name),
+            reply_markup=self.get_main_menu_keyboard()
+        )
+    
+    async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Основной обработчик callback запросов"""
+        query = update.callback_query
+        await query.answer()
+        
+        try:
+            if query.data == "bus_tours":
+                await self.handle_bus_tours(query, context)
+            elif query.data.startswith("tour_"):
+                tour_key = query.data.replace("tour_", "")
+                await self.handle_specific_tour(query, context, tour_key)
+            elif query.data.startswith("request_"):
+                tour_key = query.data.replace("request_", "")
+                await self.handle_tour_request(query, context, tour_key)
+            elif query.data == "avia_tours":
+                await self.handle_avia_tours(query, context)
+            elif query.data == "avia_request":
+                await self.handle_avia_request(query, context)
+            elif query.data == "contact":
+                await self.handle_contacts(query, context)
+            elif query.data == "back_to_menu":
+                await self.handle_back_to_menu(query, context)
+        except Exception as e:
+            logger.error(f"Ошибка при обработке callback: {e}")
+            await query.edit_message_text("Произошла ошибка. Попробуйте еще раз.")
+    
+    async def run(self):
+        """Запуск бота"""
+        if not self.config.bot_token:
+            logger.error("BOT_TOKEN не установлен!")
+            return
+        
+        application = ApplicationBuilder().token(self.config.bot_token).build()
+        application.add_handler(CommandHandler("start", self.start_command))
+        application.add_handler(CallbackQueryHandler(self.handle_callback_query))
+        
+        self.setup_flask()
+        self.keep_alive()
+        
+        logger.info("Бот запущен")
+        await application.run_polling()
 
 async def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(handle_button))
-    keep_alive()
-    await application.run_polling()
+    """Главная функция"""
+    bot = TravelBot()
+    await bot.run()
 
 if __name__ == '__main__':
     import nest_asyncio
