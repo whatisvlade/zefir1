@@ -15,6 +15,9 @@ import pytz
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+
 @dataclass
 class TourInfo:
     """Класс для хранения информации о туре"""
