@@ -31,7 +31,6 @@ class BotConfig:
     avia_tour_link: str
     working_hours: Dict[str, int]
     company_info: Dict[str, str]
-    webhook_url: Optional[str] = None
 
 class ConfigManager:
     """Менеджер для работы с конфигурацией"""
@@ -55,8 +54,7 @@ class ConfigManager:
             company_info=config_data.get("company_info", {
                 "address": "г. Минск, ул. Примерная, 1",
                 "schedule": "пн-пт 10:00–19:00, сб 11:00–16:00, вс — по договорённости"
-            }),
-            webhook_url=os.getenv("WEBHOOK_URL", config_data.get("webhook_url"))
+            })
         )
     
     @staticmethod
@@ -182,7 +180,7 @@ class TravelBot:
     async def handle_bus_tours(self, query, context):
         """Обработка автобусных туров"""
         buttons = [
-            [InlineKeyboardButton(f"🌍 {tour.name}", callback_data=f"tour_{key}")]
+            [InlineKeyboardButton(f"{tour.name}", callback_data=f"tour_{key}")]
             for key, tour in self.tours.items()
         ]
         buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
@@ -316,35 +314,15 @@ class TravelBot:
             logger.error("BOT_TOKEN не установлен!")
             return
         
-        self.application = ApplicationBuilder().token(self.config.bot_token).build()
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
-        
-        # Устанавливаем webhook
-        webhook_url = os.getenv("WEBHOOK_URL")
-        if webhook_url:
-            await self.application.bot.set_webhook(url=f"{webhook_url}/webhook")
-            logger.info(f"Webhook установлен: {webhook_url}/webhook")
-        else:
-            # Удаляем webhook если его нет
-            await self.application.bot.delete_webhook()
-            logger.info("Webhook удален, используется polling")
+        application = ApplicationBuilder().token(self.config.bot_token).build()
+        application.add_handler(CommandHandler("start", self.start_command))
+        application.add_handler(CallbackQueryHandler(self.handle_callback_query))
         
         self.setup_flask()
         self.keep_alive()
         
         logger.info("Бот запущен")
-        
-        # Если есть webhook URL, запускаем только Flask, иначе polling
-        if webhook_url:
-            # Инициализируем приложение для webhook
-            await self.application.initialize()
-            await self.application.start()
-            # Держим приложение запущенным
-            while True:
-                await asyncio.sleep(1)
-        else:
-            await self.application.run_polling()
+        await application.run_polling()
 
 async def main():
     """Главная функция"""
