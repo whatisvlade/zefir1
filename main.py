@@ -93,6 +93,7 @@ def tg_webhook():
         message_id = cq["message"]["message_id"]
         data = cq["data"]
         user_name = cq["from"].get("first_name", "")
+        user = cq["from"]
         print("CALLBACK:", chat_id, message_id, data, flush=True)
 
         answer_callback(cq["id"])
@@ -115,6 +116,7 @@ def tg_webhook():
             key = data.replace("visa_req_", "")
             visa = visas.get(key, {})
 
+            # 1) экран подтверждения
             edit_message(
                 chat_id,
                 message_id,
@@ -125,6 +127,12 @@ def tg_webhook():
                 {"inline_keyboard": [
                     [{"text": "🔙 Назад", "callback_data": "visas"}]
                 ]}
+            )
+
+            # 2) отдельное сообщение, которое увидит amoCRM
+            send_message(
+                chat_id,
+                f"#ЗАЯВКА\nВиза: {visa.get('name', '')}\nКлиент: @{user.get('username', '')}"
             )
 
         elif data.startswith("visa_"):
