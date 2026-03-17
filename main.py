@@ -10,7 +10,6 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 DEFAULT_PHONE = os.getenv("DEFAULT_PHONE", "+375290000000")
 COMPANY_ADDRESS = os.getenv("COMPANY_ADDRESS", "г. Минск, ул. Примерная, 1")
 SCHEDULE = os.getenv("SCHEDULE", "пн-пт 10:00–19:00, сб 11:00–16:00")
-MANAGER_CHAT_ID = os.getenv("MANAGER_CHAT_ID")
 
 # Загрузка виз
 try:
@@ -54,6 +53,7 @@ def home():
 @app.route('/tg-webhook', methods=['POST'])
 def tg_webhook():
     update = request.json
+
     if not update:
         return jsonify({"ok": True})
 
@@ -86,32 +86,38 @@ def tg_webhook():
         elif data.startswith("visa_req_"):
             key = data.replace("visa_req_", "")
             visa = visas.get(key, {})
-            if MANAGER_CHAT_ID:
-                requests.post(f"{TELEGRAM_API}/sendMessage", json={
-                    "chat_id": MANAGER_CHAT_ID,
-                    "text": f"#ЗАЯВКА\nВиза: {visa.get('name','')}\nКлиент: {user.get('first_name','')} @{user.get('username','')}\nchat_id: {chat_id}"
-                })
-            edit_message(chat_id, message_id,
-                "✅ Заявка отправлена!\nМенеджер свяжется с вами в рабочее время.",
-                {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "visas"}]]})
+            # просто подтверждаем заявку для клиента — amoCRM увидит переписку
+            edit_message(
+                chat_id,
+                message_id,
+                f"✅ Заявка на визу <b>{visa.get('name', '')}</b> отправлена!\n"
+                "Менеджер свяжется с вами в рабочее время.",
+                {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "visas"}]]}
+            )
 
         elif data.startswith("visa_"):
             key = data.replace("visa_", "")
             visa = visas.get(key)
             if visa:
                 phone = visa.get("manager_contact", DEFAULT_PHONE)
-                edit_message(chat_id, message_id,
+                edit_message(
+                    chat_id,
+                    message_id,
                     f"{visa['description']}\n\n📱 Контакт менеджера: {phone}",
                     {"inline_keyboard": [
                         [{"text": "🔗 Подробнее", "url": visa["url"]}],
                         [{"text": "✉️ Оставить заявку", "callback_data": f"visa_req_{key}"}],
                         [{"text": "🔙 Назад", "callback_data": "visas"}]
-                    ]})
+                    ]}
+                )
 
         elif data == "contact":
-            edit_message(chat_id, message_id,
+            edit_message(
+                chat_id,
+                message_id,
                 f"📞 Контакты:\n📱 {DEFAULT_PHONE}\n🏢 {COMPANY_ADDRESS}\n🕓 {SCHEDULE}",
-                {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "back"}]]})
+                {"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "back"}]]}
+            )
 
         elif data == "back":
             main_menu(chat_id, message_id, user_name, edit=True)
