@@ -11,16 +11,14 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 from datetime import datetime
 import pytz
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 @dataclass
-class TourInfo:
-    """Класс для хранения информации о туре"""
+class VisaInfo:
+    """Класс для хранения информации о визе"""
     name: str
     description: str
     url: str
@@ -32,16 +30,13 @@ class BotConfig:
     bot_token: str
     request_trigger: str
     default_manager_contact: str
-    avia_tour_link: str
     working_hours: Dict[str, int]
     company_info: Dict[str, str]
 
 class ConfigManager:
-    """Менеджер для работы с конфигурацией"""
     
     @staticmethod
     def load_config() -> BotConfig:
-        """Загружает конфигурацию из файла или переменных окружения"""
         try:
             with open('config.json', 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
@@ -53,7 +48,6 @@ class ConfigManager:
             bot_token=os.getenv("BOT_TOKEN", config_data.get("bot_token", "")),
             request_trigger=config_data.get("request_trigger", "#ЗАЯВКА"),
             default_manager_contact=config_data.get("default_manager_contact", "+375290000000"),
-            avia_tour_link=config_data.get("avia_tour_link", "https://tours.example.com"),
             working_hours=config_data.get("working_hours", {"start": 10, "end": 21}),
             company_info=config_data.get("company_info", {
                 "address": "г. Минск, ул. Примерная, 1",
@@ -62,27 +56,26 @@ class ConfigManager:
         )
     
     @staticmethod
-    def load_tours() -> Dict[str, TourInfo]:
-        """Загружает информацию о турах из файла"""
+    def load_visas() -> Dict[str, VisaInfo]:
+        """Загружает информацию о визах из файла"""
         try:
-            with open('tours.json', 'r', encoding='utf-8') as f:
-                tours_data = json.load(f)
+            with open('visas.json', 'r', encoding='utf-8') as f:
+                visas_data = json.load(f)
             
-            tours = {}
-            for key, data in tours_data.items():
-                tours[key] = TourInfo(
+            visas = {}
+            for key, data in visas_data.items():
+                visas[key] = VisaInfo(
                     name=data["name"],
                     description=data["description"],
                     url=data["url"],
                     manager_contact=data.get("manager_contact")
                 )
-            return tours
+            return visas
         except FileNotFoundError:
-            logger.error("tours.json не найден! Создайте файл с турами.")
+            logger.error("visas.json не найден! Создайте файл с визами.")
             return {}
 
 class MessageTemplates:
-    """Шаблоны сообщений"""
     
     @staticmethod
     def welcome_message(user_name: str) -> str:
@@ -93,30 +86,21 @@ class MessageTemplates:
         if is_working_hours:
             return "Заявка отправлена!\nОжидайте, с вами свяжется менеджер."
         return "Заявка отправлена!\nВ рабочее время с вами свяжется менеджер."
-    
-    @staticmethod
-    def avia_request_sent_message(is_working_hours: bool) -> str:
-        if is_working_hours:
-            return "Заявка на подбор тура отправлена!\nОжидайте, с вами свяжется менеджер."
-        return "Заявка на подбор тура отправлена!\nВ рабочее время с вами свяжется менеджер."
 
 class TravelBot:
-    """Основной класс бота"""
     
     def __init__(self):
         self.config = ConfigManager.load_config()
-        self.tours = ConfigManager.load_tours()
+        self.visas = ConfigManager.load_visas()
         self.application = None
         self.app = Flask('')
     
     def keep_alive(self):
-        """Простой веб-сервер для Render"""
         @self.app.route('/')
         def home():
             return "✅ Zefir Travel Bot работает!"
 
         def run():
-            # Скрываем логи Flask
             import logging
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.ERROR)
@@ -127,27 +111,20 @@ class TravelBot:
         t.start()
     
     def is_working_hours(self) -> bool:
-        """Проверяет, рабочее ли время (московское время)"""
         moscow_tz = pytz.timezone('Europe/Moscow')
         current_hour = datetime.now(moscow_tz).hour
-        start_hour = self.config.working_hours["start"]
-        end_hour = self.config.working_hours["end"]
-        return start_hour <= current_hour < end_hour
+        return self.config.working_hours["start"] <= current_hour < self.config.working_hours["end"]
     
     def get_main_menu_keyboard(self) -> InlineKeyboardMarkup:
-        """Возвращает клавиатуру главного меню"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚌 Автобусные туры", callback_data="bus_tours")],
-            [InlineKeyboardButton("✈️ Авиа туры", callback_data="avia_tours")],
+            [InlineKeyboardButton("🛂 Визы", callback_data="visas")],
             [InlineKeyboardButton("📞 Контакты", callback_data="contact")]
         ])
     
-    async def send_request_message(self, context: ContextTypes.DEFAULT_TYPE, 
-                                 chat_id: int, tour_name: str, user_info: str):
-        """Отправляет сообщение с заявкой и удаляет его через 3 секунды"""
+    async def send_request_message(self, context, chat_id: int, service_name: str, user_info: str):
         msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=f"{self.config.request_trigger} Тур: {tour_name}\n{user_info}"
+            text=f"{self.config.request_trigger} Услуга: {service_name}\n{user_info}"
         )
         
         async def delete_message():
@@ -160,100 +137,64 @@ class TravelBot:
         asyncio.create_task(delete_message())
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
         user = update.effective_user
         await update.message.reply_text(
             MessageTemplates.welcome_message(user.first_name),
             reply_markup=self.get_main_menu_keyboard()
         )
     
-    async def handle_bus_tours(self, query, context):
-        """Обработка автобусных туров"""
+    async def handle_visas(self, query, context):
+        """Список виз"""
         buttons = [
-            [InlineKeyboardButton(f"{tour.name}", callback_data=f"tour_{key}")]
-            for key, tour in self.tours.items()
+            [InlineKeyboardButton(visa.name, callback_data=f"visa_{key}")]
+            for key, visa in self.visas.items()
         ]
         buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
         
         await query.edit_message_text(
-            "🚌 Автобусные туры:\nВыберите направление:",
+            "🛂 Визы:\nВыберите направление:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
     
-    async def handle_specific_tour(self, query, context, tour_key: str):
-        """Обработка конкретного тура"""
-        if tour_key not in self.tours:
-            await query.edit_message_text("Тур не найден")
+    async def handle_specific_visa(self, query, context, visa_key: str):
+        """Конкретная виза"""
+        if visa_key not in self.visas:
+            await query.edit_message_text("Виза не найдена")
             return
         
-        tour = self.tours[tour_key]
-        manager_phone = tour.manager_contact or self.config.default_manager_contact
+        visa = self.visas[visa_key]
+        manager_phone = visa.manager_contact or self.config.default_manager_contact
         
         await query.edit_message_text(
-            f"{tour.description}\n\n📱 Контакт менеджера: {manager_phone}",
+            f"{visa.description}\n\n📱 Контакт менеджера: {manager_phone}",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔗 Подробнее / Программа тура", url=tour.url)],
-                [InlineKeyboardButton("Оставить заявку", callback_data=f"request_{tour_key}")],
-                [InlineKeyboardButton("🔙 Назад", callback_data="bus_tours")]
+                [InlineKeyboardButton("🔗 Подробнее", url=visa.url)],
+                [InlineKeyboardButton("Оставить заявку", callback_data=f"visa_request_{visa_key}")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="visas")]
             ]),
             parse_mode="HTML"
         )
     
-    async def handle_tour_request(self, query, context, tour_key: str):
-        """Обработка заявки на тур"""
-        tour = self.tours.get(tour_key)
-        if not tour:
-            await query.edit_message_text("Тур не найден")
+    async def handle_visa_request(self, query, context, visa_key: str):
+        """Заявка на визу"""
+        visa = self.visas.get(visa_key)
+        if not visa:
+            await query.edit_message_text("Виза не найдена")
             return
         
         user = query.from_user
         user_info = f"Имя: {user.first_name} @{user.username or ''}"
         
-        await self.send_request_message(
-            context, query.message.chat.id, tour.name, user_info
-        )
+        await self.send_request_message(context, query.message.chat.id, visa.name, user_info)
         
-        response_text = MessageTemplates.request_sent_message(self.is_working_hours())
         await query.edit_message_text(
-            response_text,
+            MessageTemplates.request_sent_message(self.is_working_hours()),
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data="bus_tours")]
-            ])
-        )
-    
-    async def handle_avia_tours(self, query, context):
-        """Обработка авиа туров"""
-        await query.edit_message_text(
-            f"✈️ Авиа туры:\n\n"
-            f"Выберите действие:\n\n"
-            f"📱 Контакт менеджера: {self.config.default_manager_contact}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Самостоятельный подбор тура", url=self.config.avia_tour_link)],
-                [InlineKeyboardButton("Оставить заявку (подбор тура с менеджером)", callback_data="avia_request")],
-                [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
-            ]),
-            parse_mode="HTML"
-        )
-    
-    async def handle_avia_request(self, query, context):
-        """Обработка заявки на авиа тур"""
-        user = query.from_user
-        user_info = f"Имя: {user.first_name} @{user.username or ''}"
-        
-        await self.send_request_message(
-            context, query.message.chat.id, "Авиа тур", user_info
-        )
-        
-        response_text = MessageTemplates.avia_request_sent_message(self.is_working_hours())
-        await query.edit_message_text(
-            response_text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data="avia_tours")]
+                [InlineKeyboardButton("🔙 Назад", callback_data="visas")]
             ])
         )
     
     async def handle_contacts(self, query, context):
-        """Обработка контактов"""
         await query.edit_message_text(
             f"📞 Контакты:\n"
             f"📱 Общий номер: {self.config.default_manager_contact}\n"
@@ -266,30 +207,24 @@ class TravelBot:
         )
     
     async def handle_back_to_menu(self, query, context):
-        """Возврат в главное меню"""
         await query.edit_message_text(
             MessageTemplates.welcome_message(query.from_user.first_name),
             reply_markup=self.get_main_menu_keyboard()
         )
     
     async def handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Основной обработчик callback запросов"""
         query = update.callback_query
         await query.answer()
         
         try:
-            if query.data == "bus_tours":
-                await self.handle_bus_tours(query, context)
-            elif query.data.startswith("tour_"):
-                tour_key = query.data.replace("tour_", "")
-                await self.handle_specific_tour(query, context, tour_key)
-            elif query.data.startswith("request_"):
-                tour_key = query.data.replace("request_", "")
-                await self.handle_tour_request(query, context, tour_key)
-            elif query.data == "avia_tours":
-                await self.handle_avia_tours(query, context)
-            elif query.data == "avia_request":
-                await self.handle_avia_request(query, context)
+            if query.data == "visas":
+                await self.handle_visas(query, context)
+            elif query.data.startswith("visa_request_"):
+                visa_key = query.data.replace("visa_request_", "")
+                await self.handle_visa_request(query, context, visa_key)
+            elif query.data.startswith("visa_"):
+                visa_key = query.data.replace("visa_", "")
+                await self.handle_specific_visa(query, context, visa_key)
             elif query.data == "contact":
                 await self.handle_contacts(query, context)
             elif query.data == "back_to_menu":
@@ -299,7 +234,6 @@ class TravelBot:
             await query.edit_message_text("Произошла ошибка. Попробуйте еще раз.")
     
     async def run(self):
-        """Запуск бота"""
         if not self.config.bot_token:
             logger.error("BOT_TOKEN не установлен!")
             return
@@ -308,14 +242,12 @@ class TravelBot:
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback_query))
         
-        # Запускаем Flask сервер для Render
         self.keep_alive()
         
         logger.info("Бот запущен в режиме polling")
         await self.application.run_polling()
 
 async def main():
-    """Главная функция"""
     bot = TravelBot()
     await bot.run()
 
